@@ -1,7 +1,6 @@
 const { EventEmitter } = require('events');
 const { Channel } = require('./channel');
 const debug = require('debug')('twlv-chat:chat');
-const assert = require('assert');
 
 class Chat extends EventEmitter {
   constructor ({ node } = {}) {
@@ -14,33 +13,32 @@ class Chat extends EventEmitter {
   }
 
   get identity () {
-    assert(this.node, 'Undefined node');
     return this.node.identity;
   }
 
   start () {
-    assert(this.node, 'Undefined node');
     this.node.on('message', this._onMessage);
-    return this.node.start();
   }
 
   stop () {
-    assert(this.node, 'Undefined node');
     this.node.removeListener('message', this._onMessage);
-    return this.node.stop();
   }
 
-  async send ({ address, group, content, type = 'text/plain' }) {
+  async send ({ channelId, address, content, type = 'text/plain' }) {
+    let channel;
+
     if (address) {
-      let channel = this.getPrivateChannel(address);
-      let { t, c } = channel.getState(this.identity.address).next();
-      await channel.put({ address: this.identity.address, content, type, t, c });
-      this.emit('channel:update', channel);
-      await this._syncStates(channel);
-      return;
+      channel = this.getPrivateChannel(address);
+    } else if (channelId) {
+      channel = this.prepareChannel(channelId);
+    } else {
+      throw new Error('Unknown send to, no channelId nor address specified');
     }
 
-    throw new Error('Unimplemented');
+    let { t, c } = channel.getState(this.identity.address).next();
+    await channel.put({ address: this.identity.address, content, type, t, c });
+    this.emit('channel:update', channel);
+    await this._syncStates(channel);
   }
 
   getPrivateChannel (address) {
@@ -63,8 +61,11 @@ class Chat extends EventEmitter {
     if (!channel) {
       if (id[0] === '0') {
         let members = [ id.substr(1, 20), id.substr(21) ];
-        let peer = members[0] === this.identity.address ? members[1] : members[0];
-        channel = this.getPrivateChannel(peer);
+        if (!members.find(member => member === this.identity.address)) {
+          throw new Error('Invalid private channel id');
+        }
+        let address = members[0] === this.identity.address ? members[1] : members[0];
+        channel = this.getPrivateChannel(address);
       } else {
         throw new Error('Unimplemented');
       }
@@ -96,7 +97,7 @@ class Chat extends EventEmitter {
       try {
         await this._flightStates(address, channel);
       } catch (err) {
-        // noop
+        this.emit('error', err);
       }
     }));
   }
